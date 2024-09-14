@@ -7,3 +7,11 @@ Optional section to provide a more detailed overview of the project.
 ## Getting Started
 Optional section to summarize important steps and how to use the project & apps in the project
 
+
+## Chat development
+```
+$ cd chat
+$ source dev/bin/active
+$ pip install -r requirement.txt
+$ streamlit run app.py
+```
