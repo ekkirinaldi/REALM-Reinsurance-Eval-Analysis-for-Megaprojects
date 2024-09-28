@@ -16,6 +16,9 @@ model = pipeline("text-generation", model="gpt2", device=device)
 # Initialize the database (run this once when starting your app)
 init_db()
 
+os.makedirs("uploads", exist_ok=True)  # Create 'uploads' directory if it doesn't exist
+os.makedirs("contents", exist_ok=True)  # Create 'contents' directory if it doesn't exist
+
 # Function to create a new conversation
 def create_initial_conversation():
     db = next(get_db())
@@ -67,114 +70,152 @@ def get_messages(conversation_id):
 
 # Function to save the uploaded file
 def save_uploaded_file(uploaded_file):
-    os.makedirs("uploads", exist_ok=True)  # Create 'uploads' directory if it doesn't exist
     file_path = os.path.join("uploads", uploaded_file.name)
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
     return file_path
 
+# Function to download a text file with user-provided content
+def create_downloadable_text_file(content, filename="download.txt"):
+    with open(filename, "w") as f:
+        f.write(content)
+    return filename
+
+def list_files_in_directory(directory):
+    """Returns a list of filenames in the given directory."""
+    try:
+        return [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+    except FileNotFoundError:
+        return []
+
 # Create an initial conversation if none exists
 create_initial_conversation()
 
-# Streamlit UI
-st.sidebar.title("Chat Application")
+# Sidebar for selecting pages
+page = st.sidebar.radio("Page", ["Download Content","Chat"])
 
-# Define custom CSS for the sidebar links
-custom_css = """
-    <style>
-    .sidebar-link {
-        color: #0000EE;
-        text-decoration: none;
-    }
-    .sidebar-link:hover {
-        text-decoration: underline;
-    }
-    </style>
-"""
-st.sidebar.markdown(custom_css, unsafe_allow_html=True)
+if page == "Download Content":
+    st.title("Download Content Page")
 
-# Sidebar for managing conversations
-with st.sidebar:
-    st.header("Conversations")
+    # List and provide downloadable files from 'contents' folder
+    st.subheader("Available Files for Download")
     
-    # Display the list of conversations
-    conversations = get_conversations()
+    files = list_files_in_directory("contents")
     
-    # Create a new conversation
-    new_conversation_name = st.text_input("New Conversation Name")
-    if st.button("Create New Conversation") and new_conversation_name:
-        add_conversation(new_conversation_name)
-        st.session_state['selected_conversation'] = None  # Reset selected conversation
-        st.session_state['messages'] = []  # Clear messages
+    if files:
+        for file in files:
+            file_path = os.path.join("contents", file)
+            with open(file_path, "rb") as f:
+                st.download_button(
+                    label=f"Download {file}",
+                    data=f,
+                    file_name=file,
+                    mime="text/plain"
+                )
+    else:
+        st.info("No files available for download.")
 
-    for conv in conversations:
-        link = f'<a class="sidebar-link" href="?id={conv.id}">{conv.name}</a>'
-        st.markdown(link, unsafe_allow_html=True)
+elif page == "Chat":
+    st.title("Chat Page")
+    
+    # Define custom CSS for the sidebar links
+    custom_css = """
+        <style>
+        .sidebar-link {
+            color: #0000EE;
+            text-decoration: none;
+        }
+        .sidebar-link:hover {
+            text-decoration: underline;
+        }
+        </style>
+    """
+    st.sidebar.markdown(custom_css, unsafe_allow_html=True)
 
-query_params = st.query_params
-selected_conversation_id = query_params.get("id", [None])[0]
+    # Sidebar for managing conversations
+    with st.sidebar:
+        st.header("Conversations")
+        
+        # Display the list of conversations
+        conversations = get_conversations()
+        
+        # Create a new conversation
+        new_conversation_name = st.text_input("New Conversation Name")
+        if st.button("Create New Conversation") and new_conversation_name:
+            add_conversation(new_conversation_name)
+            st.session_state['selected_conversation'] = None  # Reset selected conversation
+            st.session_state['messages'] = []  # Clear messages
 
-if selected_conversation_id:
-    selected_conversation = next((conv for conv in get_conversations() if conv.id == int(selected_conversation_id)), None)
-    if selected_conversation:
-        st.session_state['selected_conversation'] = selected_conversation
-        st.session_state['messages'] = get_messages(selected_conversation.id)
-else:
-    if 'selected_conversation' not in st.session_state or st.session_state['selected_conversation'] is None:
-        st.session_state['selected_conversation'] = conversations[0] if conversations else None
-        st.session_state['messages'] = get_messages(st.session_state['selected_conversation'].id) if st.session_state['selected_conversation'] else []
+        for conv in conversations:
+            link = f'<a class="sidebar-link" href="?id={conv.id}">{conv.name}</a>'
+            st.markdown(link, unsafe_allow_html=True)
 
-# Display messages from the conversation
-if st.session_state.get('selected_conversation'):
-    for msg in st.session_state["messages"]:
-        if isinstance(msg, dict) and "role" in msg and "content" in msg:
-            st.chat_message(msg["role"]).write(msg["content"])
-        else:
-            # Handle unexpected message format
-            print(f"Unexpected message format: {msg}")
+    query_params = st.query_params
+    selected_conversation_id = query_params.get("id", [None])[0]
 
-# File upload state handling
-if 'upload_requested' not in st.session_state:
-    st.session_state['upload_requested'] = False
+    if selected_conversation_id:
+        selected_conversation = next((conv for conv in get_conversations() if conv.id == int(selected_conversation_id)), None)
+        if selected_conversation:
+            st.session_state['selected_conversation'] = selected_conversation
+            st.session_state['messages'] = get_messages(selected_conversation.id)
+    else:
+        if 'selected_conversation' not in st.session_state or st.session_state['selected_conversation'] is None:
+            st.session_state['selected_conversation'] = conversations[0] if conversations else None
+            st.session_state['messages'] = get_messages(st.session_state['selected_conversation'].id) if st.session_state['selected_conversation'] else []
 
-# Handle new message input
-if prompt := st.chat_input():
-    # Append the user's message to the session state
-    st.session_state["messages"].append({"role": "user", "content": prompt})
-    st.chat_message("user").write(prompt)
+    # Display messages from the conversation
+    if st.session_state.get('selected_conversation'):
+        for msg in st.session_state["messages"]:
+            if isinstance(msg, dict) and "role" in msg and "content" in msg:
+                st.chat_message(msg["role"]).write(msg["content"])
+            else:
+                # Handle unexpected message format
+                print(f"Unexpected message format: {msg}")
 
-    # Check if the user asked to upload a file
-    st.session_state['upload_requested'] = "upload file" in prompt.lower()
-
-    # If not requesting file upload, generate a response
-    if not st.session_state['upload_requested']:
-        # Generate a response using the model
-        response = model(prompt, max_length=100, num_return_sequences=1)
-        msg = response[0]['generated_text'].strip()
-
-        # Append the assistant's message to the session state
-        st.session_state["messages"].append({"role": "assistant", "content": msg})
-        st.chat_message("assistant").write(msg)
-
-        # Save the new messages to the database
-        if st.session_state.get('selected_conversation'):
-            add_message(st.session_state['selected_conversation'].id, "user", prompt)
-            add_message(st.session_state['selected_conversation'].id, "assistant", msg)
-
-# If file upload is requested, show the upload button
-if st.session_state['upload_requested']:
-    uploaded_file = st.file_uploader("Choose a file", type=["png", "jpg", "jpeg", "pdf"])
-    if uploaded_file is not None:
-        file_path = save_uploaded_file(uploaded_file)
-        uploaded_message = f"File uploaded: {uploaded_file.name}"
-
-        # Append the file upload message to the session state
-        st.session_state["messages"].append({"role": "assistant", "content": uploaded_message})
-        st.chat_message("assistant").write(uploaded_message)
-
-        # Save the upload confirmation message to the database
-        if st.session_state.get('selected_conversation'):
-            add_message(st.session_state['selected_conversation'].id, "assistant", uploaded_message)
-
-        # Reset the upload request state after upload is done
+    # File upload state handling
+    if 'upload_requested' not in st.session_state:
         st.session_state['upload_requested'] = False
+
+    # Handle new message input
+    if prompt := st.chat_input():
+        # Append the user's message to the session state
+        st.session_state["messages"].append({"role": "user", "content": prompt})
+        st.chat_message("user").write(prompt)
+
+        # Check if the user asked to upload a file
+        st.session_state['upload_requested'] = "upload file" in prompt.lower()
+
+        # If not requesting file upload, generate a response
+        if not st.session_state['upload_requested']:
+            # Generate a response using the model
+            response = model(prompt, max_length=100, num_return_sequences=1)
+            msg = response[0]['generated_text'].strip()
+
+            # Append the assistant's message to the session state
+            st.session_state["messages"].append({"role": "assistant", "content": msg})
+            st.chat_message("assistant").write(msg)
+
+            # Save the new messages to the database
+            if st.session_state.get('selected_conversation'):
+                add_message(st.session_state['selected_conversation'].id, "user", prompt)
+                add_message(st.session_state['selected_conversation'].id, "assistant", msg)
+
+    # If file upload is requested, show the upload button
+    if st.session_state['upload_requested']:
+        uploaded_file = st.file_uploader("Choose a file", type=["png", "jpg", "jpeg", "pdf"])
+        if uploaded_file is not None:
+            file_path = save_uploaded_file(uploaded_file)
+            uploaded_message = f"File uploaded: {uploaded_file.name}"
+
+            # Append the file upload message to the session state
+            st.session_state["messages"].append({"role": "assistant", "content": uploaded_message})
+            st.chat_message("assistant").write(uploaded_message)
+
+            # Save the upload confirmation message to the database
+            if st.session_state.get('selected_conversation'):
+                add_message(st.session_state['selected_conversation'].id, "assistant", uploaded_message)
+
+            # Reset the upload request state after upload is done
+            st.session_state['upload_requested'] = False
+
+# Download content page logic
