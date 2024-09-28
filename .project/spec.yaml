@@ -32,23 +32,7 @@ environment:
     entrypoint_script: ""
     labels:
     - cuda11.7
-    apps:
-    - name: REALM
-      type: python
-      class: webapp
-      start_command: streamlit run app.py
-      health_check_command: curl -f http://localhost:8501/health
-      stop_command: echo "Stopping python app"
-      user_msg: Running Streamlit app for REALM
-      logfile_path: ""
-      timeout_seconds: 60
-      icon_url: ""
-      webapp_options:
-        autolaunch: true
-        port: "8501"
-        proxy:
-          trim_prefix: false
-        url_command: echo "http://localhost:8501"
+    apps: []
     programming_languages:
     - python3
     icon_url: ""
@@ -82,11 +66,11 @@ environment:
       target: ""
 execution:
   apps:
-  - name: REALM
-    type: python
+  - name: chat
+    type: custom
     class: webapp
     start_command: streamlit run app.py
-    health_check_command: curl -f http://localhost:8501/health
+    health_check_command: curl -f "http://localhost:8501/"
     stop_command: pkill -f app.py
     user_msg: ""
     logfile_path: ""
@@ -94,10 +78,10 @@ execution:
     icon_url: ""
     webapp_options:
       autolaunch: true
-      port: "5801"
+      port: "8501"
       proxy:
-        trim_prefix: false
-      url: /
+        trim_prefix: true
+      url: http://localhost:8501/
   resources:
     gpu:
       requested: 1

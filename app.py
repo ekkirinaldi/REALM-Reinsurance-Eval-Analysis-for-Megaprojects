@@ -19,10 +19,6 @@ init_db()
 os.makedirs("uploads", exist_ok=True)  # Create 'uploads' directory if it doesn't exist
 os.makedirs("contents", exist_ok=True)  # Create 'contents' directory if it doesn't exist
 
-if st.experimental_get_query_params().get("health") == ["true"]:
-    st.json({"status": "healthy"})
-    return
-
 # Function to create a new conversation
 def create_initial_conversation():
     db = next(get_db())
