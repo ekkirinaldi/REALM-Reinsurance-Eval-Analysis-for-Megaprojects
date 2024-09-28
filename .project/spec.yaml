@@ -33,26 +33,22 @@ environment:
     labels:
     - cuda11.7
     apps:
-    - name: jupyterlab
-      type: jupyterlab
+    - name: REALM
+      type: python
       class: webapp
-      start_command: jupyter lab --allow-root --port 8888 --ip 0.0.0.0 --no-browser
-        --NotebookApp.base_url=\$PROXY_PREFIX --NotebookApp.default_url=/lab --NotebookApp.allow_origin='*'
-      health_check_command: '[ \$(echo url=\$(jupyter lab list | head -n 2 | tail
-        -n 1 | cut -f1 -d'' '' | grep -v ''Currently'' | sed "s@/?@/lab?@g") | curl
-        -o /dev/null -s -w ''%{http_code}'' --config -) == ''200'' ]'
-      stop_command: jupyter lab stop 8888
-      user_msg: ""
+      start_command: streamlit run app.py
+      health_check_command: curl -f http://localhost:8501/health
+      stop_command: echo "Stopping python app"
+      user_msg: Running Streamlit app for REALM
       logfile_path: ""
       timeout_seconds: 60
       icon_url: ""
       webapp_options:
         autolaunch: true
-        port: "8888"
+        port: "8501"
         proxy:
           trim_prefix: false
-        url_command: jupyter lab list | head -n 2 | tail -n 1 | cut -f1 -d' ' | grep
-          -v 'Currently'
+        url_command: echo "http://localhost:8501"
     programming_languages:
     - python3
     icon_url: ""
@@ -77,22 +73,38 @@ environment:
       - python3-dev
       - python3-pip
       - vim
+      - python3.10-venv
     - name: pip
       binary_path: /usr/local/bin/pip
-      installed_packages:
-      - jupyterlab==4.0.7
+      installed_packages: []
     package_manager_environment:
       name: ""
       target: ""
 execution:
-  apps: []
+  apps:
+  - name: REALM
+    type: python
+    class: webapp
+    start_command: streamlit run app.py
+    health_check_command: curl -f http://localhost:8501/health
+    stop_command: pkill -f app.py
+    user_msg: ""
+    logfile_path: ""
+    timeout_seconds: 60
+    icon_url: ""
+    webapp_options:
+      autolaunch: true
+      port: "5801"
+      proxy:
+        trim_prefix: false
+      url: /
   resources:
     gpu:
       requested: 1
-    sharedMemoryMB: 1024
+    sharedMemoryMB: 4000
   secrets: []
   mounts:
   - type: project
     target: /project/
-    description: Project directory
+    description: ""
     options: rw
