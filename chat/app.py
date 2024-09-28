@@ -2,6 +2,7 @@ import streamlit as st
 import torch
 from transformers import pipeline
 import json
+import os
 from sqlalchemy.orm import Session
 from database import get_db, init_db
 from models import Conversation, Messages
@@ -64,6 +65,14 @@ def get_messages(conversation_id):
             print(f"Error decoding JSON for message ID {msg.id}: {msg.data}")
     return result
 
+# Function to save the uploaded file
+def save_uploaded_file(uploaded_file):
+    os.makedirs("uploads", exist_ok=True)  # Create 'uploads' directory if it doesn't exist
+    file_path = os.path.join("uploads", uploaded_file.name)
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return file_path
+
 # Create an initial conversation if none exists
 create_initial_conversation()
 
@@ -95,7 +104,6 @@ with st.sidebar:
     new_conversation_name = st.text_input("New Conversation Name")
     if st.button("Create New Conversation") and new_conversation_name:
         add_conversation(new_conversation_name)
-        st.query_params(id=None)  # Clear the query parameter
         st.session_state['selected_conversation'] = None  # Reset selected conversation
         st.session_state['messages'] = []  # Clear messages
 
@@ -125,21 +133,48 @@ if st.session_state.get('selected_conversation'):
             # Handle unexpected message format
             print(f"Unexpected message format: {msg}")
 
+# File upload state handling
+if 'upload_requested' not in st.session_state:
+    st.session_state['upload_requested'] = False
+
 # Handle new message input
 if prompt := st.chat_input():
     # Append the user's message to the session state
     st.session_state["messages"].append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
-    
-    # Generate a response using the model
-    response = model(prompt, max_length=100, num_return_sequences=1)
-    msg = response[0]['generated_text'].strip()
-    
-    # Append the assistant's message to the session state
-    st.session_state["messages"].append({"role": "assistant", "content": msg})
-    st.chat_message("assistant").write(msg)
 
-    # Save the new messages to the database
-    if st.session_state.get('selected_conversation'):
-        add_message(st.session_state['selected_conversation'].id, "user", prompt)
-        add_message(st.session_state['selected_conversation'].id, "assistant", msg)
+    # Check if the user asked to upload a file
+    st.session_state['upload_requested'] = "upload file" in prompt.lower()
+
+    # If not requesting file upload, generate a response
+    if not st.session_state['upload_requested']:
+        # Generate a response using the model
+        response = model(prompt, max_length=100, num_return_sequences=1)
+        msg = response[0]['generated_text'].strip()
+
+        # Append the assistant's message to the session state
+        st.session_state["messages"].append({"role": "assistant", "content": msg})
+        st.chat_message("assistant").write(msg)
+
+        # Save the new messages to the database
+        if st.session_state.get('selected_conversation'):
+            add_message(st.session_state['selected_conversation'].id, "user", prompt)
+            add_message(st.session_state['selected_conversation'].id, "assistant", msg)
+
+# If file upload is requested, show the upload button
+if st.session_state['upload_requested']:
+    uploaded_file = st.file_uploader("Choose a file", type=["png", "jpg", "jpeg", "pdf"])
+    if uploaded_file is not None:
+        file_path = save_uploaded_file(uploaded_file)
+        uploaded_message = f"File uploaded: {uploaded_file.name}"
+
+        # Append the file upload message to the session state
+        st.session_state["messages"].append({"role": "assistant", "content": uploaded_message})
+        st.chat_message("assistant").write(uploaded_message)
+
+        # Save the upload confirmation message to the database
+        if st.session_state.get('selected_conversation'):
+            add_message(st.session_state['selected_conversation'].id, "assistant", uploaded_message)
+
+        # Reset the upload request state after upload is done
+        st.session_state['upload_requested'] = False
