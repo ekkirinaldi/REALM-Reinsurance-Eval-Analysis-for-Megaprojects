@@ -1,17 +1,17 @@
 import streamlit as st
-import torch
-from transformers import pipeline
+import requests
 import json
 import os
+import logging
 from sqlalchemy.orm import Session
 from database import get_db, init_db
 from models import Conversation, Messages
+import PyPDF2
+import docx
 
-# Define device (0 for GPU if available, otherwise -1 for CPU)
-device = 0 if torch.cuda.is_available() else -1
-
-# Load the GPT-based model (e.g., GPT-2)
-model = pipeline("text-generation", model="gpt2", device=device)
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize the database (run this once when starting your app)
 init_db()
@@ -27,6 +27,7 @@ def create_initial_conversation():
         db.add(new_conversation)
         db.commit()
         db.refresh(new_conversation)
+        logger.info(f"Created initial conversation: {new_conversation.id}")
         return new_conversation
     return None
 
@@ -37,6 +38,7 @@ def add_conversation(name):
     db.add(new_conversation)
     db.commit()
     db.refresh(new_conversation)
+    logger.info(f"Added new conversation: {new_conversation.id}")
     return new_conversation
 
 # Function to add a new message
@@ -47,12 +49,15 @@ def add_message(conversation_id, role, content):
     db.add(new_message)
     db.commit()
     db.refresh(new_message)
+    logger.info(f"Added new message to conversation {conversation_id}")
     return new_message
 
 # Function to get all conversations
 def get_conversations():
     db = next(get_db())
-    return db.query(Conversation).all()
+    conversations = db.query(Conversation).all()
+    logger.info(f"Retrieved {len(conversations)} conversations")
+    return conversations
 
 # Function to get messages for a specific conversation
 def get_messages(conversation_id):
@@ -64,8 +69,8 @@ def get_messages(conversation_id):
             message_data = json.loads(msg.data)
             result.append(message_data)
         except json.JSONDecodeError:
-            # Handle the error or log it
-            print(f"Error decoding JSON for message ID {msg.id}: {msg.data}")
+            logger.error(f"Error decoding JSON for message ID {msg.id}: {msg.data}")
+    logger.info(f"Retrieved {len(result)} messages for conversation {conversation_id}")
     return result
 
 # Function to save the uploaded file
@@ -73,29 +78,219 @@ def save_uploaded_file(uploaded_file):
     file_path = os.path.join("uploads", uploaded_file.name)
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
+    logger.info(f"Saved uploaded file: {file_path}")
     return file_path
 
 # Function to download a text file with user-provided content
 def create_downloadable_text_file(content, filename="download.txt"):
     with open(filename, "w") as f:
         f.write(content)
+    logger.info(f"Created downloadable file: {filename}")
     return filename
 
 def list_files_in_directory(directory):
     """Returns a list of filenames in the given directory."""
     try:
-        return [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+        files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+        logger.info(f"Listed {len(files)} files in {directory}")
+        return files
     except FileNotFoundError:
+        logger.error(f"Directory not found: {directory}")
         return []
+
+# Function to call Perplexity API
+def call_perplexity_api(prompt):
+    api_key = st.session_state.get('perplexity_api_key', '')
+    if not api_key:
+        return "Please enter your Perplexity API key in the sidebar to use this feature."
+
+    api_url = "https://api.perplexity.ai/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    payload = {
+        "model": "llama-3.1-sonar-huge-128k-online",
+        "messages": [{"role": "user", "content": prompt}]
+    }
+    try:
+        response = requests.post(api_url, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except requests.RequestException as e:
+        logger.error(f"Error calling Perplexity API: {str(e)}")
+        return f"Sorry, I couldn't generate a response. Error: {str(e)}"
+
+# New function to read and process the uploaded document
+def process_document(file_path):
+    _, file_extension = os.path.splitext(file_path)
+    content = ""
+
+    try:
+        if file_extension.lower() == '.pdf':
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page in pdf_reader.pages:
+                    content += page.extract_text()
+        elif file_extension.lower() in ['.docx', '.doc']:
+            doc = docx.Document(file_path)
+            for para in doc.paragraphs:
+                content += para.text + "\n"
+        else:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+        logger.info(f"Processed document: {file_path}")
+        return content
+    except Exception as e:
+        logger.error(f"Error processing document {file_path}: {str(e)}")
+        return f"Error processing document: {str(e)}"
+
+# Modified function to map content to 5C method with separate API calls and yield results one by one
+def map_to_5c(content):
+    categories = [
+        ("Character", """
+        Analyze the provided project document, focusing on the Character aspect for credit scoring. Evaluate the following elements:
+        1. Years in operation
+        2. Industry reputation
+        3. Management experience
+        4. Regulatory compliance history
+        
+        Scoring (0-5 scale):
+        0 - Poor reputation, multiple regulatory issues
+        1 - Some concerns, minor regulatory issues
+        2 - Average reputation, no major issues
+        3 - Good reputation, strong compliance
+        4 - Excellent reputation, industry leader
+        5 - Outstanding reputation, exemplary track record
+        
+        Provide a concise analysis addressing each element above. If any information is missing, note its absence. Conclude with:
+        1. An overall Character assessment summary
+        2. A Character score on a scale of 0-100
+        3. Brief recommendations for improvement or areas needing clarification
+        Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
+        """),
+        ("Capacity", """
+        Analyze the provided project document, focusing on the Capacity aspect for credit scoring. Evaluate the following elements:
+        1. Debt-to-equity ratio
+        2. Operating cash flow
+        3. Profit margins
+        4. Revenue growth rate
+        
+        Scoring (0-5 scale):
+        0 - Severe financial distress
+        1 - Struggling financially
+        2 - Average financial performance
+        3 - Strong financial position
+        4 - Very strong financials
+        5 - Exceptional financial health
+        
+        Provide a brief analysis for each element above. If any information is missing, note its absence. Conclude with:
+        1. An overall Capacity assessment summary
+        2. A Capacity score on a scale of 0-100
+        3. Key recommendations for enhancing project capacity
+        Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
+        """),
+        ("Capital", """
+        Analyze the provided project document, focusing on the Capital aspect for credit scoring. Evaluate the following elements:
+        1. Total assets
+        2. Net worth
+        3. Liquidity ratio
+        4. Capital adequacy ratio (for financial institutions)
+        
+        Scoring (0-5 scale):
+        0 - Severely undercapitalized
+        1 - Undercapitalized
+        2 - Adequately capitalized
+        3 - Well-capitalized
+        4 - Very well-capitalized
+        5 - Exceptionally strong capital position
+        
+        Provide a brief analysis for each element above. If any information is missing, note its absence. Conclude with:
+        1. An overall Capital assessment summary
+        2. A Capital score on a scale of 0-100
+        3. Recommendations for improving capital position or structure
+        Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
+        """),
+        ("Collateral", """
+        Analyze the provided project document, focusing on the Collateral aspect for credit scoring. Evaluate the following elements:
+        1. Quality of assets
+        2. Diversification of asset portfolio
+        3. Valuation of assets
+        4. Ease of liquidation
+        
+        Scoring (0-5 scale):
+        0 - No viable collateral
+        1 - Limited, low-quality collateral
+        2 - Adequate collateral
+        3 - Good quality, diversified collateral
+        4 - High-quality, easily liquidated collateral
+        5 - Premium collateral or strong guarantees
+        
+        Provide a brief analysis for each element above. If any information is missing, note its absence. Conclude with:
+        1. An overall Collateral assessment summary
+        2. A Collateral score on a scale of 0-100
+        3. Recommendations for improving collateral quality or coverage
+        Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
+        """),
+        ("Conditions", """
+        Analyze the provided project document, focusing on the Conditions aspect for credit scoring. Evaluate the following elements:
+        1. Economic conditions in customer's primary markets
+        2. Industry trends
+        3. Geopolitical risks
+        4. Natural disaster exposure
+        
+        Scoring (0-5 scale):
+        0 - Extremely unfavorable conditions
+        1 - Challenging conditions
+        2 - Neutral conditions
+        3 - Favorable conditions
+        4 - Very favorable conditions
+        5 - Optimal conditions for growth and stability
+        
+        Provide a brief analysis for each element above. If any information is missing, note its absence. Conclude with:
+        1. An overall Conditions assessment summary
+        2. A Conditions score on a scale of 0-100
+        3. Recommendations for addressing unfavorable conditions or leveraging positive ones
+        Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
+        """)
+    ]
+    
+    results = {}
+    for category, description in categories:
+        prompt = f"""
+        Analyze the following content focusing on the {category} aspect of the 5C method:
+
+        {content}
+
+        {category}: {description}
+
+        Provide key points and insights based on the given content.
+        """
+        result = call_perplexity_api(prompt)
+        results[category] = result
+        yield category, result
+    
+    # Store the complete 5C analysis results in the session state
+    st.session_state['5c_analysis'] = results
+    
+    logger.info("Completed 5C analysis and stored in session state")
 
 # Create an initial conversation if none exists
 create_initial_conversation()
 
-# Sidebar for selecting pages
-page = st.sidebar.radio("Page", ["Download Content","Chat"])
+# Streamlit app
+st.title("5C Analysis Chat App")
 
-if page == "Download Content":
-    st.title("Download Content Page")
+# Sidebar for API key input and page selection
+st.sidebar.header("Settings")
+perplexity_api_key = st.sidebar.text_input("Enter Perplexity API Key", type="password")
+if perplexity_api_key:
+    st.session_state['perplexity_api_key'] = perplexity_api_key
+
+page = st.sidebar.radio("Page", [ "Risk Assessment", "Download Sample"])
+
+if page == "Download Sample":
+    st.header("Download Sample Report")
 
     # List and provide downloadable files from 'contents' folder
     st.subheader("Available Files for Download")
@@ -115,107 +310,111 @@ if page == "Download Content":
     else:
         st.info("No files available for download.")
 
-elif page == "Chat":
-    st.title("Chat Page")
+elif page == "Risk Assessment":
+    st.header("Risk Assessment Page")
     
-    # Define custom CSS for the sidebar links
-    custom_css = """
-        <style>
-        .sidebar-link {
-            color: #0000EE;
-            text-decoration: none;
-        }
-        .sidebar-link:hover {
-            text-decoration: underline;
-        }
-        </style>
-    """
-    st.sidebar.markdown(custom_css, unsafe_allow_html=True)
-
     # Sidebar for managing conversations
-    with st.sidebar:
-        st.header("Conversations")
-        
-        # Display the list of conversations
-        conversations = get_conversations()
-        
-        # Create a new conversation
-        new_conversation_name = st.text_input("New Conversation Name")
-        if st.button("Create New Conversation") and new_conversation_name:
-            add_conversation(new_conversation_name)
-            st.session_state['selected_conversation'] = None  # Reset selected conversation
-            st.session_state['messages'] = []  # Clear messages
+    st.sidebar.header("Conversations")
+    
+    # Display the list of conversations
+    conversations = get_conversations()
+    
+    # Create a new conversation
+    def create_new_conversation():
+        if new_conversation_name:
+            new_conv = add_conversation(new_conversation_name)
+            st.session_state['selected_conversation'] = new_conv
+            st.session_state['messages'] = []
+            st.session_state['file_processed'] = False
+            st.session_state['5c_analysis'] = None
+            st.rerun()
 
-        for conv in conversations:
-            link = f'<a class="sidebar-link" href="?id={conv.id}">{conv.name}</a>'
-            st.markdown(link, unsafe_allow_html=True)
+    new_conversation_name = st.sidebar.text_input("New Conversation Name", key="new_conv_name", on_change=create_new_conversation)
 
-    query_params = st.query_params
-    selected_conversation_id = query_params.get("id", [None])[0]
+    # Select conversation
+    selected_conversation = st.sidebar.selectbox(
+        "Select a conversation",
+        options=conversations,
+        format_func=lambda x: x.name,
+        key="conversation_selector"
+    )
 
-    if selected_conversation_id:
-        selected_conversation = next((conv for conv in get_conversations() if conv.id == int(selected_conversation_id)), None)
-        if selected_conversation:
-            st.session_state['selected_conversation'] = selected_conversation
-            st.session_state['messages'] = get_messages(selected_conversation.id)
-    else:
-        if 'selected_conversation' not in st.session_state or st.session_state['selected_conversation'] is None:
-            st.session_state['selected_conversation'] = conversations[0] if conversations else None
-            st.session_state['messages'] = get_messages(st.session_state['selected_conversation'].id) if st.session_state['selected_conversation'] else []
+    if selected_conversation:
+        st.session_state['selected_conversation'] = selected_conversation
+        st.session_state['messages'] = get_messages(selected_conversation.id)
+
+    # File upload at the start of each conversation
+    if st.session_state.get('perplexity_api_key') and not st.session_state.get('file_processed', False):
+        st.write("Please upload a file to start the conversation.")
+        uploaded_file = st.file_uploader("Choose a file", type=["txt", "pdf", "docx"])
+        if uploaded_file is not None:
+            file_path = save_uploaded_file(uploaded_file)
+            content = process_document(file_path)
+            st.write("Analyzing document...")
+            
+            # Create a progress bar
+            progress_bar = st.progress(0)
+            
+            # Add the analysis to the conversation as bot messages one by one
+            if st.session_state.get('selected_conversation'):
+                for i, (category, result) in enumerate(map_to_5c(content)):
+                    message = f"Here's the {category} analysis:\n\n{result}"
+                    add_message(st.session_state['selected_conversation'].id, "assistant", message)
+                    st.session_state['messages'].append({"role": "assistant", "content": message})
+                    
+                    # Update the progress bar
+                    progress = (i + 1) / 5
+                    progress_bar.progress(progress)
+                    
+                    # Display the message
+                    st.chat_message("assistant").write(message)
+            
+            st.session_state['file_processed'] = True
+            st.rerun()
+    elif not st.session_state.get('perplexity_api_key'):
+        st.warning("Please enter your Perplexity API key in the sidebar to start the analysis.")
 
     # Display messages from the conversation
     if st.session_state.get('selected_conversation'):
         for msg in st.session_state["messages"]:
             if isinstance(msg, dict) and "role" in msg and "content" in msg:
-                st.chat_message(msg["role"]).write(msg["content"])
+                if msg["role"] == "user":
+                    st.chat_message("user").write(msg["content"])
+                elif msg["role"] == "assistant":
+                    st.chat_message("assistant").write(msg["content"])
             else:
-                # Handle unexpected message format
-                print(f"Unexpected message format: {msg}")
-
-    # File upload state handling
-    if 'upload_requested' not in st.session_state:
-        st.session_state['upload_requested'] = False
+                logger.warning(f"Unexpected message format: {msg}")
 
     # Handle new message input
-    if prompt := st.chat_input():
+    if prompt := st.chat_input("Type your message here..."):
         # Append the user's message to the session state
         st.session_state["messages"].append({"role": "user", "content": prompt})
         st.chat_message("user").write(prompt)
 
-        # Check if the user asked to upload a file
-        st.session_state['upload_requested'] = "upload file" in prompt.lower()
+        # Generate a response using the Perplexity API with 5C analysis context
+        response_prompt = f"""
+        Based on the 5C analysis provided earlier:
 
-        # If not requesting file upload, generate a response
-        if not st.session_state['upload_requested']:
-            # Generate a response using the model
-            response = model(prompt, max_length=100, num_return_sequences=1)
-            msg = response[0]['generated_text'].strip()
+        {json.dumps(st.session_state.get('5c_analysis', {}), indent=2)}
 
-            # Append the assistant's message to the session state
-            st.session_state["messages"].append({"role": "assistant", "content": msg})
-            st.chat_message("assistant").write(msg)
+        And the user's question:
 
-            # Save the new messages to the database
-            if st.session_state.get('selected_conversation'):
-                add_message(st.session_state['selected_conversation'].id, "user", prompt)
-                add_message(st.session_state['selected_conversation'].id, "assistant", msg)
+        User: {prompt}
 
-    # If file upload is requested, show the upload button
-    if st.session_state['upload_requested']:
-        uploaded_file = st.file_uploader("Choose a file", type=["png", "jpg", "jpeg", "pdf"])
-        if uploaded_file is not None:
-            file_path = save_uploaded_file(uploaded_file)
-            uploaded_message = f"File uploaded: {uploaded_file.name}"
+        Provide a detailed and informative answer, incorporating relevant aspects from the 5C analysis where applicable.
+        """
+        with st.spinner("Generating response..."):
+            msg = call_perplexity_api(response_prompt)
 
-            # Append the file upload message to the session state
-            st.session_state["messages"].append({"role": "assistant", "content": uploaded_message})
-            st.chat_message("assistant").write(uploaded_message)
+        # Append the assistant's message to the session state
+        st.session_state["messages"].append({"role": "assistant", "content": msg})
+        st.chat_message("assistant").write(msg)
 
-            # Save the upload confirmation message to the database
-            if st.session_state.get('selected_conversation'):
-                add_message(st.session_state['selected_conversation'].id, "assistant", uploaded_message)
+        # Save the new messages to the database
+        if st.session_state.get('selected_conversation'):
+            add_message(st.session_state['selected_conversation'].id, "user", prompt)
+            add_message(st.session_state['selected_conversation'].id, "assistant", msg)
 
-            # Reset the upload request state after upload is done
-            st.session_state['upload_requested'] = False
+        st.rerun()
 
-# Download content page logic
+logger.info("App finished running")

@@ -59,3 +59,8 @@ data/scratch/*
 # Virtual environment
 chat/dev/
 chat/env/
+
+.project/
+.vscode/
+
+realm/
