@@ -58,3 +58,4 @@ data/scratch/*
 
 # Virtual environment
 chat/dev/
+chat/env/
