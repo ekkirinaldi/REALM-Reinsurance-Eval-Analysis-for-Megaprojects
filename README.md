@@ -1,4 +1,23 @@
-## Revolutionizing Project Risk Assessment with R.E.A.L.M.
+# NVIDIA AI Workbench: Introduction [![Open In AI Workbench](https://img.shields.io/badge/Open_In-AI_Workbench-76B900)](https://ngc.nvidia.com/open-ai-workbench/aHR0cHM6Ly9naXRodWIuY29tL05WSURJQS93b3JrYmVuY2gtZXhhbXBsZS1oeWJyaWQtcmFn)
+
+<!-- Banner Image -->
+<img src="https://developer-blogs.nvidia.com/wp-content/uploads/2024/07/rag-representation.jpg" width="100%">
+
+<!-- Links -->
+<p align="center"> 
+  <a href="https://www.nvidia.com/en-us/deep-learning-ai/solutions/data-science/workbench/" style="color: #76B900;">:arrow_down: Download AI Workbench</a> •
+  <a href="https://docs.nvidia.com/ai-workbench/" style="color: #76B900;">:book: Read the Docs</a> •
+  <a href="https://docs.nvidia.com/ai-workbench/user-guide/latest/quickstart/example-projects.html" style="color: #76B900;">:open_file_folder: Explore Example Projects</a> •
+  <a href="https://forums.developer.nvidia.com/t/support-workbench-example-project-agentic-rag/303414" style="color: #76B900;">:rotating_light: Facing Issues? Let Us Know!</a>
+</p>
+
+**Note:** [NVIDIA AI Workbench](https://www.youtube.com/watch?v=ntMRzPzSvM4) is the easiest way to get this RAG app running.
+- NVIDIA AI Workbench is a <ins>free client application</ins> that you can install on your own machines.
+- It provides portable and reproducible dev environments by handling Git repos and containers for you.
+- Installing on a local system? Check out our guides here for [Windows](https://docs.nvidia.com/ai-workbench/user-guide/latest/installation/windows.html), [Local Ubuntu 22.04](https://docs.nvidia.com/ai-workbench/user-guide/latest/installation/ubuntu-local.html) and for [macOS 12 or higher](https://docs.nvidia.com/ai-workbench/user-guide/latest/installation/macos.html)
+- Installing on a remote system? Check out our guide for [Remote Ubuntu 22.04](https://docs.nvidia.com/ai-workbench/user-guide/latest/installation/ubuntu-remote.html)
+
+# Revolutionizing Project Risk Assessment with R.E.A.L.M.
 
 In the complex world of reinsurance, underwriters face significant challenges when assessing risks for mega-projects. The traditional 5C approach (Character, Capacity, Capital, Collateral, and Conditions) has long been the industry standard, but its application often involves time-consuming manual processes and subjective interpretations. R.E.A.L.M. (Risk Evaluation and Assessment Leveraging Machine learning) addresses these pain points by digitizing and enhancing the 5C approach, providing underwriters with a powerful tool to streamline their work and improve decision-making.
 
