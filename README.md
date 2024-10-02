@@ -72,10 +72,25 @@ The R.E.A.L.M. project is organized as follows:
 - `.gitignore`: Specifies intentionally untracked files to ignore
 - `README.md`: This file, containing project documentation
 
-## Conclusion
+## Quick Start
 
-R.E.A.L.M. represents a significant leap forward in project risk assessment for the reinsurance industry. By addressing the core challenges faced by underwriters and enhancing the traditional 5C approach with AI and machine learning, R.E.A.L.M. not only streamlines the risk assessment process but also improves its accuracy and reliability.
+To get started with the R.E.A.L.M. project using NVIDIA Workbench, follow these steps:
 
-As the complexity of mega-projects continues to grow, tools like R.E.A.L.M. will become increasingly essential for underwriters. By providing a more efficient, consistent, and comprehensive approach to risk assessment, R.E.A.L.M. empowers underwriters to navigate the complexities of modern reinsurance with greater confidence and precision.
+1. **Clone the Repository**:
+    ```sh
+    git clone https://github.com/ekkirinaldi/REALM-Reinsurance-Eval-Analysis-for-Megaprojects.git
+    cd REALM-Reinsurance-Eval-Analysis-for-Megaprojects
+    ```
 
-The development of R.E.A.L.M. demonstrates how technology can be leveraged to solve industry-specific challenges, paving the way for further innovations in risk assessment and management. As R.E.A.L.M. continues to evolve and learn from real-world applications, its potential to transform the reinsurance industry and set new standards for project risk assessment is truly exciting.
+2. **Set Up the Environment**:
+    - Ensure you have NVIDIA Workbench installed.
+    - Open the project in NVIDIA Workbench.
+
+3. **Get your Perlplexity API**:
+    - Get your API Key from Perplexity.
+
+4. **Start the Application**:
+    - Click "Open Chat" button.
+
+5. **Access the Application**:
+    - Open your web browser and navigate to your localhost. Paste your Perplexity API key, download the sample document, and you're ready to go.
