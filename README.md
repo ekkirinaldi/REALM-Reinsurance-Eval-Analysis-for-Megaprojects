@@ -76,15 +76,14 @@ The R.E.A.L.M. project is organized as follows:
 
 To get started with the R.E.A.L.M. project using NVIDIA Workbench, follow these steps:
 
-1. **Clone the Repository**:
-    ```sh
-    git clone https://github.com/ekkirinaldi/REALM-Reinsurance-Eval-Analysis-for-Megaprojects.git
-    cd REALM-Reinsurance-Eval-Analysis-for-Megaprojects
-    ```
-
-2. **Set Up the Environment**:
+1. **Set Up the Environment**:
     - Ensure you have NVIDIA Workbench installed.
     - Open the project in NVIDIA Workbench.
+
+2. **Clone the Repository**:
+    ```sh
+    https://github.com/ekkirinaldi/REALM-Reinsurance-Eval-Analysis-for-Megaprojects.git
+    ```
 
 3. **Get your Perlplexity API**:
     - Get your API Key from Perplexity.
