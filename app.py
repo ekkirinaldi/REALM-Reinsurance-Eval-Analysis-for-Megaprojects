@@ -73,6 +73,19 @@ def get_messages(conversation_id):
     logger.info(f"Retrieved {len(result)} messages for conversation {conversation_id}")
     return result
 
+# Function to delete a conversation
+def delete_conversation(conversation_id):
+    db = next(get_db())
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if conversation:
+        db.query(Messages).filter(Messages.conversation_id == conversation_id).delete()
+        db.delete(conversation)
+        db.commit()
+        logger.info(f"Deleted conversation: {conversation_id}")
+        return True
+    logger.warning(f"Conversation not found: {conversation_id}")
+    return False
+
 # Function to save the uploaded file
 def save_uploaded_file(uploaded_file):
     file_path = os.path.join("uploads", uploaded_file.name)
@@ -342,6 +355,18 @@ elif page == "Risk Assessment":
     if selected_conversation:
         st.session_state['selected_conversation'] = selected_conversation
         st.session_state['messages'] = get_messages(selected_conversation.id)
+
+        # Add delete button for the selected conversation
+        if st.sidebar.button(f"Delete '{selected_conversation.name}'"):
+            if delete_conversation(selected_conversation.id):
+                st.sidebar.success(f"Conversation '{selected_conversation.name}' deleted.")
+                del st.session_state['selected_conversation']
+                del st.session_state['messages']
+                st.session_state['file_processed'] = False
+                st.session_state['5c_analysis'] = None
+                st.rerun()
+            else:
+                st.sidebar.error("Failed to delete the conversation.")
 
     # File upload at the start of each conversation
     if st.session_state.get('perplexity_api_key') and not st.session_state.get('file_processed', False):
