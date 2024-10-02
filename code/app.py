@@ -1,194 +1,445 @@
 import streamlit as st
-import tempfile
-import os
 import requests
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import OpenAIEmbeddings
-from langchain_community.vectorstores import FAISS
+import json
+import os
+import logging
+from sqlalchemy.orm import Session
+from database import get_db, init_db
+from models import Conversation, Messages
+import PyPDF2
+import docx
 
-# Set up API keys
-os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-PERPLEXITY_API_KEY = st.secrets["PERPLEXITY_API_KEY"]
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Set up Streamlit page
-st.set_page_config(page_title="Document Analysis with Perplexity API")
-st.title("Document Analysis using Perplexity API")
+# Initialize the database (run this once when starting your app)
+init_db()
 
-def process_file(file):
-    # Get the file extension
-    file_extension = os.path.splitext(file.name)[1]
+os.makedirs("uploads", exist_ok=True)  # Create 'uploads' directory if it doesn't exist
+os.makedirs("contents", exist_ok=True)  # Create 'contents' directory if it doesn't exist
 
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-        temp_file.write(file.read())
-        temp_file_path = temp_file.name
+# Function to create a new conversation
+def create_initial_conversation():
+    db = next(get_db())
+    if not db.query(Conversation).first():
+        new_conversation = Conversation(name="Initial Conversation")
+        db.add(new_conversation)
+        db.commit()
+        db.refresh(new_conversation)
+        logger.info(f"Created initial conversation: {new_conversation.id}")
+        return new_conversation
+    return None
 
-    # Load the document based on its type
-    if file_extension == ".pdf":
-        loader = PyPDFLoader(temp_file_path)
-    elif file_extension == ".docx":
-        loader = Docx2txtLoader(temp_file_path)
-    elif file_extension == ".txt":
-        loader = TextLoader(temp_file_path)
-    else:
-        raise ValueError("Unsupported file type")
+# Function to add a new conversation
+def add_conversation(name):
+    db = next(get_db())
+    new_conversation = Conversation(name=name)
+    db.add(new_conversation)
+    db.commit()
+    db.refresh(new_conversation)
+    logger.info(f"Added new conversation: {new_conversation.id}")
+    return new_conversation
 
-    documents = loader.load()
+# Function to add a new message
+def add_message(conversation_id, role, content):
+    db = next(get_db())
+    message_data = {"role": role, "content": content}
+    new_message = Messages(conversation_id=conversation_id, data=json.dumps(message_data))
+    db.add(new_message)
+    db.commit()
+    db.refresh(new_message)
+    logger.info(f"Added new message to conversation {conversation_id}")
+    return new_message
 
-    # Split the documents into chunks
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    texts = text_splitter.split_documents(documents)
+# Function to get all conversations
+def get_conversations():
+    db = next(get_db())
+    conversations = db.query(Conversation).all()
+    logger.info(f"Retrieved {len(conversations)} conversations")
+    return conversations
 
-    # Create embeddings and store in vector database
-    embeddings = OpenAIEmbeddings()
-    db = FAISS.from_documents(texts, embeddings)
+# Function to get messages for a specific conversation
+def get_messages(conversation_id):
+    db = next(get_db())
+    messages = db.query(Messages).filter(Messages.conversation_id == conversation_id).all()
+    result = []
+    for msg in messages:
+        try:
+            message_data = json.loads(msg.data)
+            result.append(message_data)
+        except json.JSONDecodeError:
+            logger.error(f"Error decoding JSON for message ID {msg.id}: {msg.data}")
+    logger.info(f"Retrieved {len(result)} messages for conversation {conversation_id}")
+    return result
 
-    # Clean up the temporary file
-    os.unlink(temp_file_path)
+# Function to delete a conversation
+def delete_conversation(conversation_id):
+    db = next(get_db())
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if conversation:
+        db.query(Messages).filter(Messages.conversation_id == conversation_id).delete()
+        db.delete(conversation)
+        db.commit()
+        logger.info(f"Deleted conversation: {conversation_id}")
+        return True
+    logger.warning(f"Conversation not found: {conversation_id}")
+    return False
 
-    return db, " ".join([doc.page_content for doc in documents])
+# Function to save the uploaded file
+def save_uploaded_file(uploaded_file):
+    file_path = os.path.join("uploads", uploaded_file.name)
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    logger.info(f"Saved uploaded file: {file_path}")
+    return file_path
 
-def perplexity_search(query, content):
-    url = "https://api.perplexity.ai/chat/completions"
+# Function to download a text file with user-provided content
+def create_downloadable_text_file(content, filename="download.txt"):
+    with open(filename, "w") as f:
+        f.write(content)
+    logger.info(f"Created downloadable file: {filename}")
+    return filename
+
+def list_files_in_directory(directory):
+    """Returns a list of filenames in the given directory."""
+    try:
+        files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+        logger.info(f"Listed {len(files)} files in {directory}")
+        return files
+    except FileNotFoundError:
+        logger.error(f"Directory not found: {directory}")
+        return []
+
+# Function to call Perplexity API
+def call_perplexity_api(prompt):
+    api_key = st.session_state.get('perplexity_api_key', '')
+    if not api_key:
+        return "Please enter your Perplexity API key in the sidebar to use this feature."
+
+    api_url = "https://api.perplexity.ai/chat/completions"
     headers = {
-        "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
     }
-    data = {
+    payload = {
         "model": "llama-3.1-sonar-huge-128k-online",
-        "messages": [
-            {
-                "role": "system",
-                "content": "Answer in JSON with format: {'Analysis': 'Your answer here', 'score': 0, summary: 'Your summary here'}. You are a helpful assistant that analyzes documents and extracts specific information based on the given query."
-            },
-            {
-                "role": "user",
-                "content": f"Given the following document content, please answer this query: {query}\n\nDocument content: {content}"
-            }
-        ]
+        "messages": [{"role": "user", "content": prompt}]
     }
-    
-    response = requests.post(url, json=data, headers=headers)
-    if response.status_code == 200:
+    try:
+        response = requests.post(api_url, headers=headers, json=payload)
+        response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
-    else:
-        return f"Error: {response.status_code} - {response.text}"
+    except requests.RequestException as e:
+        logger.error(f"Error calling Perplexity API: {str(e)}")
+        return f"Sorry, I couldn't generate a response. Error: {str(e)}"
 
-# File uploader
-uploaded_file = st.file_uploader("Choose a file", type=["pdf", "docx", "txt"])
+# New function to read and process the uploaded document
+def process_document(file_path):
+    _, file_extension = os.path.splitext(file_path)
+    content = ""
 
-# Initialize session state
-if "processed_file" not in st.session_state:
-    st.session_state.processed_file = None
-    st.session_state.document_content = None
+    try:
+        if file_extension.lower() == '.pdf':
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page in pdf_reader.pages:
+                    content += page.extract_text()
+        elif file_extension.lower() in ['.docx', '.doc']:
+            doc = docx.Document(file_path)
+            for para in doc.paragraphs:
+                content += para.text + "\n"
+        else:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+        logger.info(f"Processed document: {file_path}")
+        return content
+    except Exception as e:
+        logger.error(f"Error processing document {file_path}: {str(e)}")
+        return f"Error processing document: {str(e)}"
 
-if uploaded_file is not None and st.session_state.processed_file is None:
-    with st.spinner("Processing file..."):
-        st.session_state.processed_file, st.session_state.document_content = process_file(uploaded_file)
-    st.success("File processed successfully!")
-
-if st.session_state.processed_file is not None:
-    # Predefined queries
-    categories = ["Character Assessment Analysis", "Capacity Assessment Analysis", "Capital Assessment Analysis", "Collateral Assessment Analysis", "Conditions Assessment Analysis"]
-    queries = [
-        """
+# Modified function to map content to 5C method with separate API calls and yield results one by one
+def map_to_5c(content):
+    categories = [
+        ("Character", """
         Analyze the provided project document, focusing on the Character aspect for credit scoring. Evaluate the following elements:
-        1. Project team/company reputation
-        2. Track record of completing similar projects
-        3. Key personnel qualifications and experience
-        4. Ethical practices and corporate social responsibility
-        5. Partnerships, collaborations, and client testimonials
-        6. Indicators of reliability and trustworthiness
+        1. Years in operation
+        2. Industry reputation
+        3. Management experience
+        4. Regulatory compliance history
+        
+        Scoring (0-5 scale):
+        0 - Poor reputation, multiple regulatory issues
+        1 - Some concerns, minor regulatory issues
+        2 - Average reputation, no major issues
+        3 - Good reputation, strong compliance
+        4 - Excellent reputation, industry leader
+        5 - Outstanding reputation, exemplary track record
         
         Provide a concise analysis addressing each element above. If any information is missing, note its absence. Conclude with:
         1. An overall Character assessment summary
         2. A Character score on a scale of 0-100
         3. Brief recommendations for improvement or areas needing clarification
         Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
-        """,
-        """
+        """),
+        ("Capacity", """
         Analyze the provided project document, focusing on the Capacity aspect for credit scoring. Evaluate the following elements:
-        1. Financial resources and cash flow projections
-        2. Revenue streams and income stability
-        3. Debt-to-Income (DTI) ratio or equivalent financial metrics
-        4. Team size and expertise relative to project scope
-        5. Resource allocation and management plans
-        6. Risk assessment and mitigation strategies
+        1. Debt-to-equity ratio
+        2. Operating cash flow
+        3. Profit margins
+        4. Revenue growth rate
+        
+        Scoring (0-5 scale):
+        0 - Severe financial distress
+        1 - Struggling financially
+        2 - Average financial performance
+        3 - Strong financial position
+        4 - Very strong financials
+        5 - Exceptional financial health
         
         Provide a brief analysis for each element above. If any information is missing, note its absence. Conclude with:
         1. An overall Capacity assessment summary
         2. A Capacity score on a scale of 0-100
         3. Key recommendations for enhancing project capacity
         Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
-        """,
-        """
+        """),
+        ("Capital", """
         Analyze the provided project document, focusing on the Capital aspect for credit scoring. Evaluate the following elements:
-        1. Initial investment or seed funding
-        2. Available liquid assets and reserves
-        3. Equity structure and ownership distribution
-        4. Capital expenditure plans and budgets
-        5. Sources of additional funding (if applicable)
-        6. Asset valuation and net worth assessment
+        1. Total assets
+        2. Net worth
+        3. Liquidity ratio
+        4. Capital adequacy ratio (for financial institutions)
+        
+        Scoring (0-5 scale):
+        0 - Severely undercapitalized
+        1 - Undercapitalized
+        2 - Adequately capitalized
+        3 - Well-capitalized
+        4 - Very well-capitalized
+        5 - Exceptionally strong capital position
         
         Provide a brief analysis for each element above. If any information is missing, note its absence. Conclude with:
         1. An overall Capital assessment summary
         2. A Capital score on a scale of 0-100
         3. Recommendations for improving capital position or structure
         Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
-        """,
-        """
+        """),
+        ("Collateral", """
         Analyze the provided project document, focusing on the Collateral aspect for credit scoring. Evaluate the following elements:
-        1. Identified assets offered as collateral
-        2. Valuation of proposed collateral
-        3. Liquidity and marketability of collateral assets
-        4. Loan-to-Value (LTV) ratio, if applicable
-        5. Legal status and ownership of collateral
-        6. Potential risks or depreciation factors affecting collateral value
+        1. Quality of assets
+        2. Diversification of asset portfolio
+        3. Valuation of assets
+        4. Ease of liquidation
+        
+        Scoring (0-5 scale):
+        0 - No viable collateral
+        1 - Limited, low-quality collateral
+        2 - Adequate collateral
+        3 - Good quality, diversified collateral
+        4 - High-quality, easily liquidated collateral
+        5 - Premium collateral or strong guarantees
         
         Provide a brief analysis for each element above. If any information is missing, note its absence. Conclude with:
         1. An overall Collateral assessment summary
         2. A Collateral score on a scale of 0-100
         3. Recommendations for improving collateral quality or coverage
         Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
-        """,
-        """
+        """),
+        ("Conditions", """
         Analyze the provided project document, focusing on the Conditions aspect for credit scoring. Evaluate the following elements:
-        1. Purpose and objectives of the project
-        2. Market conditions and industry trends
-        3. Economic factors affecting the project
-        4. Regulatory environment and compliance requirements
-        5. Competitive landscape and market positioning
-        6. Potential external risks or opportunities
+        1. Economic conditions in customer's primary markets
+        2. Industry trends
+        3. Geopolitical risks
+        4. Natural disaster exposure
+        
+        Scoring (0-5 scale):
+        0 - Extremely unfavorable conditions
+        1 - Challenging conditions
+        2 - Neutral conditions
+        3 - Favorable conditions
+        4 - Very favorable conditions
+        5 - Optimal conditions for growth and stability
         
         Provide a brief analysis for each element above. If any information is missing, note its absence. Conclude with:
         1. An overall Conditions assessment summary
         2. A Conditions score on a scale of 0-100
         3. Recommendations for addressing unfavorable conditions or leveraging positive ones
         Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
-        """
+        """)
     ]
+    
+    results = {}
+    for category, description in categories:
+        prompt = f"""
+        Analyze the following content focusing on the {category} aspect of the 5C method:
 
-    # Display results for predefined queries
-    st.header("Document Analysis Results")
-    for category, query in zip(categories, queries):
-        with st.expander(category):
-            with st.spinner("Analyzing..."):
-                result = perplexity_search(query, st.session_state.document_content)
-            st.write(result)
+        {content}
 
-    # Custom query input
-    st.header("Ask a Custom Question")
-    custom_query = st.text_input("Enter your question about the document:")
-    if custom_query:
-        with st.spinner("Analyzing..."):
-            result = perplexity_search(custom_query, st.session_state.document_content)
-        st.write(result)
+        {category}: {description}
 
-    # Download processed content
-    st.download_button(
-        label="Download Processed Document Content",
-        data=st.session_state.document_content,
-        file_name="processed_document.txt",
-        mime="text/plain"
+        Provide key points and insights based on the given content.
+        """
+        result = call_perplexity_api(prompt)
+        results[category] = result
+        yield category, result
+    
+    # Store the complete 5C analysis results in the session state
+    st.session_state['5c_analysis'] = results
+    
+    logger.info("Completed 5C analysis and stored in session state")
+
+# Create an initial conversation if none exists
+create_initial_conversation()
+
+# Streamlit app
+st.title("REALM: Reinsurance Eval Analysis for Megaprojects")
+
+# Sidebar for API key input and page selection
+st.sidebar.header("Settings")
+perplexity_api_key = st.sidebar.text_input("Enter Perplexity API Key", type="password")
+if perplexity_api_key:
+    st.session_state['perplexity_api_key'] = perplexity_api_key
+
+page = st.sidebar.radio("Page", [ "Risk Assessment", "Download Sample"])
+
+if page == "Download Sample":
+    st.header("Download Sample Report")
+
+    # List and provide downloadable files from 'contents' folder
+    st.subheader("Available Files for Download")
+    
+    files = list_files_in_directory("contents")
+    
+    if files:
+        for file in files:
+            file_path = os.path.join("contents", file)
+            with open(file_path, "rb") as f:
+                st.download_button(
+                    label=f"Download {file}",
+                    data=f,
+                    file_name=file,
+                    mime="text/plain"
+                )
+    else:
+        st.info("No files available for download.")
+
+elif page == "Risk Assessment":
+    st.header("Risk Assessment Page")
+    
+    # Sidebar for managing conversations
+    st.sidebar.header("Conversations")
+    
+    # Display the list of conversations
+    conversations = get_conversations()
+    
+    # Create a new conversation
+    def create_new_conversation():
+        if new_conversation_name:
+            new_conv = add_conversation(new_conversation_name)
+            st.session_state['selected_conversation'] = new_conv
+            st.session_state['messages'] = []
+            st.session_state['file_processed'] = False
+            st.session_state['5c_analysis'] = None
+            st.rerun()
+
+    new_conversation_name = st.sidebar.text_input("New Conversation Name", key="new_conv_name", on_change=create_new_conversation)
+
+    # Select conversation
+    selected_conversation = st.sidebar.selectbox(
+        "Select a conversation",
+        options=conversations,
+        format_func=lambda x: x.name,
+        key="conversation_selector"
     )
+
+    if selected_conversation:
+        st.session_state['selected_conversation'] = selected_conversation
+        st.session_state['messages'] = get_messages(selected_conversation.id)
+
+        # Add delete button for the selected conversation
+        if st.sidebar.button(f"Delete '{selected_conversation.name}'"):
+            if delete_conversation(selected_conversation.id):
+                st.sidebar.success(f"Conversation '{selected_conversation.name}' deleted.")
+                del st.session_state['selected_conversation']
+                del st.session_state['messages']
+                st.session_state['file_processed'] = False
+                st.session_state['5c_analysis'] = None
+                st.rerun()
+            else:
+                st.sidebar.error("Failed to delete the conversation.")
+
+    # File upload at the start of each conversation
+    if st.session_state.get('perplexity_api_key') and not st.session_state.get('file_processed', False):
+        st.write("Please upload a file to start the conversation.")
+        uploaded_file = st.file_uploader("Choose a file", type=["txt", "pdf", "docx"])
+        if uploaded_file is not None:
+            file_path = save_uploaded_file(uploaded_file)
+            content = process_document(file_path)
+            st.write("Analyzing document...")
+            
+            # Create a progress bar
+            progress_bar = st.progress(0)
+            
+            # Add the analysis to the conversation as bot messages one by one
+            if st.session_state.get('selected_conversation'):
+                for i, (category, result) in enumerate(map_to_5c(content)):
+                    message = f"Here's the {category} analysis:\n\n{result}"
+                    add_message(st.session_state['selected_conversation'].id, "assistant", message)
+                    st.session_state['messages'].append({"role": "assistant", "content": message})
+                    
+                    # Update the progress bar
+                    progress = (i + 1) / 5
+                    progress_bar.progress(progress)
+                    
+                    # Display the message
+                    st.chat_message("assistant").write(message)
+            
+            st.session_state['file_processed'] = True
+            st.rerun()
+    elif not st.session_state.get('perplexity_api_key'):
+        st.warning("Please enter your Perplexity API key in the sidebar to start the analysis.")
+
+    # Display messages from the conversation
+    if st.session_state.get('selected_conversation'):
+        for msg in st.session_state["messages"]:
+            if isinstance(msg, dict) and "role" in msg and "content" in msg:
+                if msg["role"] == "user":
+                    st.chat_message("user").write(msg["content"])
+                elif msg["role"] == "assistant":
+                    st.chat_message("assistant").write(msg["content"])
+            else:
+                logger.warning(f"Unexpected message format: {msg}")
+
+    # Handle new message input
+    if prompt := st.chat_input("Type your message here..."):
+        # Append the user's message to the session state
+        st.session_state["messages"].append({"role": "user", "content": prompt})
+        st.chat_message("user").write(prompt)
+
+        # Generate a response using the Perplexity API with 5C analysis context
+        response_prompt = f"""
+        Based on the 5C analysis provided earlier:
+
+        {json.dumps(st.session_state.get('5c_analysis', {}), indent=2)}
+
+        And the user's question:
+
+        User: {prompt}
+
+        Provide a detailed and informative answer, incorporating relevant aspects from the 5C analysis where applicable.
+        """
+        with st.spinner("Generating response..."):
+            msg = call_perplexity_api(response_prompt)
+
+        # Append the assistant's message to the session state
+        st.session_state["messages"].append({"role": "assistant", "content": msg})
+        st.chat_message("assistant").write(msg)
+
+        # Save the new messages to the database
+        if st.session_state.get('selected_conversation'):
+            add_message(st.session_state['selected_conversation'].id, "user", prompt)
+            add_message(st.session_state['selected_conversation'].id, "assistant", msg)
+
+        st.rerun()
+
+logger.info("App finished running")

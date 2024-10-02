@@ -59,6 +59,19 @@ R.E.A.L.M. empowers underwriters in several key ways:
 
 5. **Informed Decision-Making**: By providing comprehensive, data-driven insights, R.E.A.L.M. enables underwriters to make more confident and well-informed decisions.
 
+## Project Structure
+
+The R.E.A.L.M. project is organized as follows:
+
+- `/code`: Contains the main Python files for the application
+  - `app.py`: The main application file
+  - `database.py`: Database configuration and session management
+  - `models.py`: SQLAlchemy models for the database
+
+- `requirements.txt`: Lists all the Python dependencies for the project
+- `.gitignore`: Specifies intentionally untracked files to ignore
+- `README.md`: This file, containing project documentation
+
 ## Conclusion
 
 R.E.A.L.M. represents a significant leap forward in project risk assessment for the reinsurance industry. By addressing the core challenges faced by underwriters and enhancing the traditional 5C approach with AI and machine learning, R.E.A.L.M. not only streamlines the risk assessment process but also improves its accuracy and reliability.
