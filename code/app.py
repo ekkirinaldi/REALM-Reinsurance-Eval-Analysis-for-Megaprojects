@@ -13,6 +13,11 @@ import docx
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Check for PPLX_KEY environment variable
+if 'PPLX_KEY' not in os.environ:
+    logger.warning("PPLX_KEY environment variable not found. Please set it before making API calls.")
+    st.warning("⚠️ PPLX_KEY environment variable not found. Please set it before making API calls.")
+
 # Initialize the database (run this once when starting your app)
 init_db()
 
@@ -113,9 +118,9 @@ def list_files_in_directory(directory):
 
 # Function to call Perplexity API
 def call_perplexity_api(prompt):
-    api_key = st.session_state.get('perplexity_api_key', '')
+    api_key = os.environ.get('PPLX_KEY')
     if not api_key:
-        return "Please enter your Perplexity API key in the sidebar to use this feature."
+        return "PPLX_KEY environment variable not found. Please set it before making API calls."
 
     api_url = "https://api.perplexity.ai/chat/completions"
     headers = {
@@ -158,10 +163,10 @@ def process_document(file_path):
         logger.error(f"Error processing document {file_path}: {str(e)}")
         return f"Error processing document: {str(e)}"
 
-# Modified function to map content to 5C method with separate API calls and yield results one by one
-def map_to_5c(content):
-    categories = [
-        ("Character", """
+# Modified function to map content to selected 5C categories with separate API calls and yield results one by one
+def map_to_5c(content, selected_categories):
+    categories = {
+        "Character": ("""
         Analyze the provided project document, focusing on the Character aspect for credit scoring. Evaluate the following elements:
         1. Years in operation
         2. Industry reputation
@@ -182,7 +187,7 @@ def map_to_5c(content):
         3. Brief recommendations for improvement or areas needing clarification
         Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
         """),
-        ("Capacity", """
+        "Capacity": ("""
         Analyze the provided project document, focusing on the Capacity aspect for credit scoring. Evaluate the following elements:
         1. Debt-to-equity ratio
         2. Operating cash flow
@@ -203,7 +208,7 @@ def map_to_5c(content):
         3. Key recommendations for enhancing project capacity
         Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
         """),
-        ("Capital", """
+        "Capital": ("""
         Analyze the provided project document, focusing on the Capital aspect for credit scoring. Evaluate the following elements:
         1. Total assets
         2. Net worth
@@ -224,7 +229,7 @@ def map_to_5c(content):
         3. Recommendations for improving capital position or structure
         Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
         """),
-        ("Collateral", """
+        "Collateral": ("""
         Analyze the provided project document, focusing on the Collateral aspect for credit scoring. Evaluate the following elements:
         1. Quality of assets
         2. Diversification of asset portfolio
@@ -245,7 +250,7 @@ def map_to_5c(content):
         3. Recommendations for improving collateral quality or coverage
         Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
         """),
-        ("Conditions", """
+        "Conditions": ("""
         Analyze the provided project document, focusing on the Conditions aspect for credit scoring. Evaluate the following elements:
         1. Economic conditions in customer's primary markets
         2. Industry trends
@@ -266,10 +271,11 @@ def map_to_5c(content):
         3. Recommendations for addressing unfavorable conditions or leveraging positive ones
         Base your analysis solely on the document's content. Maintain objectivity and a professional tone throughout your response.
         """)
-    ]
+    }
     
     results = {}
-    for category, description in categories:
+    for category in selected_categories:
+        description = categories[category]
         prompt = f"""
         Analyze the following content focusing on the {category} aspect of the 5C method:
 
@@ -286,7 +292,7 @@ def map_to_5c(content):
     # Store the complete 5C analysis results in the session state
     st.session_state['5c_analysis'] = results
     
-    logger.info("Completed 5C analysis and stored in session state")
+    logger.info("Completed selected 5C analysis and stored in session state")
 
 # Create an initial conversation if none exists
 create_initial_conversation()
@@ -294,13 +300,9 @@ create_initial_conversation()
 # Streamlit app
 st.title("REALM: Reinsurance Eval Analysis for Megaprojects")
 
-# Sidebar for API key input and page selection
-st.sidebar.header("Settings")
-perplexity_api_key = st.sidebar.text_input("Enter Perplexity API Key", type="password")
-if perplexity_api_key:
-    st.session_state['perplexity_api_key'] = perplexity_api_key
-
-page = st.sidebar.radio("Page", [ "Risk Assessment", "Download Sample"])
+# Sidebar for page selection
+st.sidebar.header("Navigation")
+page = st.sidebar.radio("Page", ["Risk Assessment", "Download Sample"])
 
 if page == "Download Sample":
     st.header("Download Sample Report")
@@ -369,35 +371,48 @@ elif page == "Risk Assessment":
                 st.sidebar.error("Failed to delete the conversation.")
 
     # File upload at the start of each conversation
-    if st.session_state.get('perplexity_api_key') and not st.session_state.get('file_processed', False):
+    if not st.session_state.get('file_processed', False):
         st.write("Please upload a file to start the conversation.")
         uploaded_file = st.file_uploader("Choose a file", type=["txt", "pdf", "docx"])
+        
         if uploaded_file is not None:
-            file_path = save_uploaded_file(uploaded_file)
-            content = process_document(file_path)
-            st.write("Analyzing document...")
+            # Add checkboxes for selecting which C's to analyze
+            st.write("Select which aspects to analyze:")
+            selected_categories = []
+            cols = st.columns(5)
+            categories = ["Character", "Capacity", "Capital", "Collateral", "Conditions"]
             
-            # Create a progress bar
-            progress_bar = st.progress(0)
+            for i, category in enumerate(categories):
+                if cols[i].checkbox(category, value=True):
+                    selected_categories.append(category)
             
-            # Add the analysis to the conversation as bot messages one by one
-            if st.session_state.get('selected_conversation'):
-                for i, (category, result) in enumerate(map_to_5c(content)):
-                    message = f"Here's the {category} analysis:\n\n{result}"
-                    add_message(st.session_state['selected_conversation'].id, "assistant", message)
-                    st.session_state['messages'].append({"role": "assistant", "content": message})
+            if st.button("Start Analysis", disabled=len(selected_categories) == 0):
+                if len(selected_categories) == 0:
+                    st.warning("Please select at least one category to analyze.")
+                else:
+                    file_path = save_uploaded_file(uploaded_file)
+                    content = process_document(file_path)
+                    st.write("Analyzing document...")
                     
-                    # Update the progress bar
-                    progress = (i + 1) / 5
-                    progress_bar.progress(progress)
+                    # Create a progress bar
+                    progress_bar = st.progress(0)
                     
-                    # Display the message
-                    st.chat_message("assistant").write(message)
-            
-            st.session_state['file_processed'] = True
-            st.rerun()
-    elif not st.session_state.get('perplexity_api_key'):
-        st.warning("Please enter your Perplexity API key in the sidebar to start the analysis.")
+                    # Add the analysis to the conversation as bot messages one by one
+                    if st.session_state.get('selected_conversation'):
+                        for i, (category, result) in enumerate(map_to_5c(content, selected_categories)):
+                            message = f"Here's the {category} analysis:\n\n{result}"
+                            add_message(st.session_state['selected_conversation'].id, "assistant", message)
+                            st.session_state['messages'].append({"role": "assistant", "content": message})
+                            
+                            # Update the progress bar based on selected categories
+                            progress = (i + 1) / len(selected_categories)
+                            progress_bar.progress(progress)
+                            
+                            # Display the message
+                            st.chat_message("assistant").write(message)
+                    
+                    st.session_state['file_processed'] = True
+                    st.rerun()
 
     # Display messages from the conversation
     if st.session_state.get('selected_conversation'):
